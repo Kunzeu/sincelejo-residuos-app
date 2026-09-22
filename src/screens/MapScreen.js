@@ -1,8 +1,15 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert } from 'react-native';
-import MapView, { Marker, Polygon } from 'react-native-maps';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, Platform } from 'react-native';
 import { collection, getDocs, doc, getDoc, updateDoc, increment } from 'firebase/firestore';
 import { db, auth } from '../services/firebase';
+
+let MapView, Marker, Polygon;
+if (Platform.OS !== 'web') {
+  const Maps = require('react-native-maps');
+  MapView = Maps.default;
+  Marker = Maps.Marker;
+  Polygon = Maps.Polygon;
+}
 
 export default function MapScreen({ navigation }) {
   const [reports, setReports] = useState([]);
@@ -139,51 +146,57 @@ export default function MapScreen({ navigation }) {
         </ScrollView>
       </View>
 
-      <MapView 
-        style={styles.map} 
-        initialRegion={initialRegion}
-        customMapStyle={customMapStyle}
-        showsUserLocation={true}
-      >
-        {reports.map(report => {
-          if (!report.location) return null;
-          if (report.status === 'resolved' && !filters.resueltos) return null;
-          if (report.status !== 'resolved' && !filters.pendientes) return null;
+      {Platform.OS !== 'web' ? (
+        <MapView 
+          style={styles.map} 
+          initialRegion={initialRegion}
+          customMapStyle={customMapStyle}
+          showsUserLocation={true}
+        >
+          {reports.map(report => {
+            if (!report.location) return null;
+            if (report.status === 'resolved' && !filters.resueltos) return null;
+            if (report.status !== 'resolved' && !filters.pendientes) return null;
 
-          return (
-            <Marker 
-              key={report.id}
-              coordinate={{ 
-                latitude: report.location.latitude, 
-                longitude: report.location.longitude 
-              }}
-              title={`Residuo - ${report.status}`}
-              description={report.description + (isCollector && report.status !== 'resolved' ? '\n(Toca para marcar recogido)' : '')}
-              pinColor={report.status === 'resolved' ? 'green' : 'orange'}
-              onCalloutPress={() => handleMarkerPress(report)}
+            return (
+              <Marker 
+                key={report.id}
+                coordinate={{ 
+                  latitude: report.location.latitude, 
+                  longitude: report.location.longitude 
+                }}
+                title={`Residuo - ${report.status}`}
+                description={report.description + (isCollector && report.status !== 'resolved' ? '\n(Toca para marcar recogido)' : '')}
+                pinColor={report.status === 'resolved' ? 'green' : 'orange'}
+                onCalloutPress={() => handleMarkerPress(report)}
+              />
+            );
+          })}
+
+          {filters.puntosLimpios && PUNTOS_LIMPIOS.map(punto => (
+            <Marker
+              key={punto.id}
+              coordinate={punto.coordinate}
+              title={punto.title}
+              description={punto.description}
+              pinColor="blue"
             />
-          );
-        })}
+          ))}
 
-        {filters.puntosLimpios && PUNTOS_LIMPIOS.map(punto => (
-          <Marker
-            key={punto.id}
-            coordinate={punto.coordinate}
-            title={punto.title}
-            description={punto.description}
-            pinColor="blue"
-          />
-        ))}
-
-        {filters.zonas && (
-          <Polygon
-            coordinates={ZONA_RECOLECCION}
-            strokeColor="rgba(33, 150, 243, 0.8)"
-            fillColor="rgba(33, 150, 243, 0.2)"
-            strokeWidth={2}
-          />
-        )}
-      </MapView>
+          {filters.zonas && (
+            <Polygon
+              coordinates={ZONA_RECOLECCION}
+              strokeColor="rgba(33, 150, 243, 0.8)"
+              fillColor="rgba(33, 150, 243, 0.2)"
+              strokeWidth={2}
+            />
+          )}
+        </MapView>
+      ) : (
+        <View style={[styles.map, {justifyContent: 'center', alignItems: 'center', backgroundColor: '#e2e8f0'}]}>
+          <Text style={{fontSize: 18, color: '#64748b'}}>Mapa no disponible en versión Web</Text>
+        </View>
+      )}
 
       <View style={styles.bottomNav}>
         {isAdmin && (
