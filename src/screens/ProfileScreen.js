@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, Button, StyleSheet, FlatList, ActivityIndicator, Image, TouchableOpacity, Modal } from 'react-native';
-import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
+import { collection, query, where, getDocs, orderBy, doc, getDoc } from 'firebase/firestore';
 import { auth, db } from '../services/firebase';
 
 export default function ProfileScreen({ navigation }) {
   const [reports, setReports] = useState([]);
+  const [ecoPoints, setEcoPoints] = useState(0);
   const [loading, setLoading] = useState(true);
   const [selectedImage, setSelectedImage] = useState(null);
 
@@ -23,10 +24,16 @@ export default function ProfileScreen({ navigation }) {
       
       const querySnapshot = await getDocs(q);
       const reportsData = [];
-      querySnapshot.forEach((doc) => {
-        reportsData.push({ id: doc.id, ...doc.data() });
+      querySnapshot.forEach((docSnap) => {
+        reportsData.push({ id: docSnap.id, ...docSnap.data() });
       });
       setReports(reportsData);
+
+      // Fetch user points
+      const userDoc = await getDoc(doc(db, 'users', auth.currentUser.uid));
+      if (userDoc.exists() && userDoc.data().ecoPoints) {
+        setEcoPoints(userDoc.data().ecoPoints);
+      }
     } catch (error) {
       console.error('Error fetching reports:', error);
     } finally {
@@ -73,8 +80,21 @@ export default function ProfileScreen({ navigation }) {
     </View>
   );
 
+  const getLevel = (points) => {
+    if (points >= 100) return '🏅 Guardián del Medio Ambiente';
+    if (points >= 50) return '🥈 Reciclador Experto';
+    if (points >= 10) return '🥉 Colaborador';
+    return '🌱 Novato';
+  };
+
   return (
     <View style={styles.container}>
+      <View style={styles.pointsContainer}>
+        <Text style={styles.pointsTitle}>Mis Eco-Puntos</Text>
+        <Text style={styles.pointsValue}>{ecoPoints}</Text>
+        <Text style={styles.levelText}>{getLevel(ecoPoints)}</Text>
+      </View>
+
       <Text style={styles.title}>Mis Reportes</Text>
       
       {loading ? (
@@ -108,6 +128,21 @@ export default function ProfileScreen({ navigation }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 20 },
+  pointsContainer: {
+    backgroundColor: '#4CAF50',
+    padding: 20,
+    borderRadius: 15,
+    alignItems: 'center',
+    marginBottom: 20,
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowRadius: 5,
+    shadowOffset: { width: 0, height: 2 }
+  },
+  pointsTitle: { color: 'white', fontSize: 18, fontWeight: '600' },
+  pointsValue: { color: 'white', fontSize: 40, fontWeight: 'bold', marginVertical: 5 },
+  levelText: { color: 'white', fontSize: 16, fontStyle: 'italic' },
   title: { fontSize: 22, fontWeight: 'bold', marginBottom: 20, textAlign: 'center' },
   space: { height: 20 },
   list: { flex: 1 },
