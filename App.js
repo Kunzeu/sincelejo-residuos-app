@@ -32,14 +32,20 @@ export default function App() {
         console.log('Failed to get push token for push notification!');
         return;
       }
-      token = (await Notifications.getExpoPushTokenAsync()).data;
-      console.log('Expo Push Token:', token);
       
-      // If user is logged in, save the token to firestore
-      if (auth.currentUser) {
-        await updateDoc(doc(db, 'users', auth.currentUser.uid), {
-          pushToken: token
-        });
+      try {
+        // En Expo Go a veces falla si no hay un projectId configurado en app.json
+        token = (await Notifications.getExpoPushTokenAsync()).data;
+        console.log('Expo Push Token:', token);
+        
+        // If user is logged in, save the token to firestore
+        if (auth.currentUser) {
+          await updateDoc(doc(db, 'users', auth.currentUser.uid), {
+            pushToken: token
+          });
+        }
+      } catch (error) {
+        console.log('No se pudo obtener el token Push (normal en desarrollo):', error);
       }
     } else {
       console.log('Must use physical device for Push Notifications');
