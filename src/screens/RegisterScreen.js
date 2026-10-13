@@ -1,89 +1,77 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, Button, StyleSheet, Alert, TouchableOpacity } from 'react-native';
-import { createUserWithEmailAndPassword } from 'firebase/auth';
-import { doc, setDoc } from 'firebase/firestore';
-import { auth, db } from '../services/firebase';
+import { View, Text, TextInput, StyleSheet, Alert, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { supabase } from '../services/supabase';
+import { colors } from '../theme';
 
 export default function RegisterScreen({ navigation }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [role, setRole] = useState('citizen'); // 'citizen' or 'collector'
+  const [role, setRole] = useState('citizen');
+  const [submitting, setSubmitting] = useState(false);
 
   const handleRegister = async () => {
     if (!email || !password) {
-      Alert.alert('Error', 'Por favor ingresa correo y contraseña');
+      Alert.alert('Faltan datos', 'Escribe correo y contraseña.');
       return;
     }
+    setSubmitting(true);
     try {
-      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-      
-      // Guardar el rol en Firestore
-      await setDoc(doc(db, 'users', userCredential.user.uid), {
-        email: email,
-        role: role,
-        ecoPoints: 0,
-        createdAt: new Date()
+      const { data, error } = await supabase.auth.signUp({
+        email: email.trim(),
+        password,
+        options: { data: { role } },
       });
-
-      Alert.alert('Éxito', 'Cuenta creada correctamente');
+      if (error) throw error;
+      if (!data.session) {
+        Alert.alert('Confirma tu correo', 'Abre el enlace que te enviamos y después inicia sesión.', [
+          { text: 'Ir a iniciar sesión', onPress: () => navigation.goBack() },
+        ]);
+        return;
+      }
+      Alert.alert('Listo', 'Cuenta creada.');
       navigation.goBack();
     } catch (error) {
-      Alert.alert('Error de registro', error.message);
+      Alert.alert('No se pudo registrar', error.message);
+    } finally {
+      setSubmitting(false);
     }
   };
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Registrar Usuario</Text>
-      
-      <TextInput 
-        style={styles.input} 
-        placeholder="Correo electrónico" 
-        value={email}
-        onChangeText={setEmail}
-        autoCapitalize="none"
-        keyboardType="email-address"
-      />
-      <TextInput 
-        style={styles.input} 
-        placeholder="Contraseña (Mín. 6 caracteres)" 
-        value={password}
-        onChangeText={setPassword}
-        secureTextEntry
-      />
-
-      <Text style={styles.roleTitle}>Selecciona tu Perfil:</Text>
-      <View style={styles.roleContainer}>
-        <TouchableOpacity 
-          style={[styles.roleButton, role === 'citizen' && styles.roleActive]} 
-          onPress={() => setRole('citizen')}
-        >
-          <Text style={[styles.roleText, role === 'citizen' && styles.roleTextActive]}>Ciudadano</Text>
-        </TouchableOpacity>
-        <TouchableOpacity 
-          style={[styles.roleButton, role === 'collector' && styles.roleActive]} 
-          onPress={() => setRole('collector')}
-        >
-          <Text style={[styles.roleText, role === 'collector' && styles.roleTextActive]}>Recolector</Text>
-        </TouchableOpacity>
+    <View style={styles.screen}>
+      <Text style={styles.title}>Crear cuenta</Text>
+      <Text style={styles.subtitle}>Elige si vas a reportar o a recoger.</Text>
+      <TextInput style={styles.input} placeholder="Correo" placeholderTextColor="#8aa094" value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" />
+      <TextInput style={styles.input} placeholder="Contraseña, mínimo 6 caracteres" placeholderTextColor="#8aa094" value={password} onChangeText={setPassword} secureTextEntry />
+      <View style={styles.roles}>
+        <Role label="Ciudadano" active={role === 'citizen'} onPress={() => setRole('citizen')} />
+        <Role label="Recolector" active={role === 'collector'} onPress={() => setRole('collector')} />
       </View>
-      
-      <View style={styles.buttonContainer}>
-        <Button title="Registrarse" onPress={handleRegister} color="#16a34a" />
-      </View>
+      <TouchableOpacity style={styles.button} onPress={handleRegister} disabled={submitting}>
+        {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Registrarme</Text>}
+      </TouchableOpacity>
     </View>
   );
 }
 
+function Role({ label, active, onPress }) {
+  return (
+    <TouchableOpacity style={[styles.role, active && styles.roleOn]} onPress={onPress}>
+      <Text style={[styles.roleText, active && styles.roleTextOn]}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
 const styles = StyleSheet.create({
-  container: { flex: 1, justifyContent: 'center', padding: 20, backgroundColor: '#f0fdf4' },
-  title: { fontSize: 26, fontWeight: 'bold', marginBottom: 20, textAlign: 'center', color: '#166534' },
-  input: { borderWidth: 1, borderColor: '#bbf7d0', backgroundColor: '#fff', padding: 15, marginBottom: 15, borderRadius: 10 },
-  roleTitle: { textAlign: 'center', marginBottom: 10, color: '#15803d', fontWeight: 'bold' },
-  roleContainer: { flexDirection: 'row', justifyContent: 'center', marginBottom: 20 },
-  roleButton: { paddingVertical: 10, paddingHorizontal: 20, borderWidth: 1, borderColor: '#bbf7d0', borderRadius: 20, marginHorizontal: 5, backgroundColor: '#fff' },
-  roleActive: { backgroundColor: '#16a34a', borderColor: '#16a34a' },
-  roleText: { color: '#666', fontWeight: 'bold' },
-  roleTextActive: { color: '#fff' },
-  buttonContainer: { borderRadius: 10, overflow: 'hidden' }
+  screen: { flex: 1, backgroundColor: colors.bg, padding: 20 },
+  title: { fontSize: 28, fontWeight: '800', color: colors.ink, marginTop: 12 },
+  subtitle: { color: colors.muted, marginTop: 6, marginBottom: 18 },
+  input: { backgroundColor: '#fff', borderRadius: 14, padding: 14, marginBottom: 10, fontSize: 16, color: colors.ink },
+  roles: { flexDirection: 'row', gap: 8, marginVertical: 8 },
+  role: { flex: 1, paddingVertical: 14, borderRadius: 14, backgroundColor: '#fff', alignItems: 'center', borderWidth: 1, borderColor: colors.line },
+  roleOn: { backgroundColor: colors.green, borderColor: colors.green },
+  roleText: { fontWeight: '800', color: colors.muted },
+  roleTextOn: { color: '#fff' },
+  button: { backgroundColor: colors.green, borderRadius: 14, paddingVertical: 15, alignItems: 'center', marginTop: 12 },
+  buttonText: { color: '#fff', fontWeight: '800', fontSize: 16 },
 });

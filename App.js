@@ -2,8 +2,7 @@ import { StatusBar } from 'expo-status-bar';
 import React, { useEffect } from 'react';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
-import { doc, updateDoc } from 'firebase/firestore';
-import { auth, db } from './src/services/firebase';
+import { supabase } from './src/services/supabase';
 import AppNavigator from './src/navigation/AppNavigator';
 
 Notifications.setNotificationHandler({
@@ -38,11 +37,12 @@ export default function App() {
         token = (await Notifications.getExpoPushTokenAsync()).data;
         console.log('Expo Push Token:', token);
         
-        // If user is logged in, save the token to firestore
-        if (auth.currentUser) {
-          await updateDoc(doc(db, 'users', auth.currentUser.uid), {
-            pushToken: token
-          });
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.user) {
+          await supabase
+            .from('profiles')
+            .update({ push_token: token })
+            .eq('id', session.user.id);
         }
       } catch (error) {
         console.log('No se pudo obtener el token Push (normal en desarrollo):', error);

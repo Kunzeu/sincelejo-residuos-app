@@ -34,7 +34,7 @@ export default function OnboardingScreen({ navigation }) {
     } catch (e) {
       // Ignore errors
     }
-    navigation.replace('Map');
+    navigation.replace('Main');
   };
 
   const nextSlide = () => {

@@ -1,170 +1,145 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, Button, StyleSheet, FlatList, ActivityIndicator, Image, TouchableOpacity, Modal } from 'react-native';
-import { collection, query, where, getDocs, orderBy, doc, getDoc } from 'firebase/firestore';
-import { auth, db } from '../services/firebase';
+import React, { useCallback, useState } from 'react';
+import { View, Text, StyleSheet, FlatList, ActivityIndicator, Image, TouchableOpacity, Modal } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import { supabase } from '../services/supabase';
+import { colors } from '../theme';
+import { achievements, levelFor, reportText, statusColors, statusLabel, timeAgo } from '../utils/reports';
 
 export default function ProfileScreen({ navigation }) {
   const [reports, setReports] = useState([]);
   const [ecoPoints, setEcoPoints] = useState(0);
+  const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(true);
   const [selectedImage, setSelectedImage] = useState(null);
 
-  useEffect(() => {
-    fetchMyReports();
-  }, []);
-
-  const fetchMyReports = async () => {
+  const fetchMyReports = useCallback(async () => {
     try {
-      if (!auth.currentUser) return;
-      const q = query(
-        collection(db, 'reports'),
-        where('userId', '==', auth.currentUser.uid),
-        orderBy('createdAt', 'desc')
-      );
-      
-      const querySnapshot = await getDocs(q);
-      const reportsData = [];
-      querySnapshot.forEach((docSnap) => {
-        reportsData.push({ id: docSnap.id, ...docSnap.data() });
-      });
-      setReports(reportsData);
-
-      // Fetch user points
-      const userDoc = await getDoc(doc(db, 'users', auth.currentUser.uid));
-      if (userDoc.exists() && userDoc.data().ecoPoints) {
-        setEcoPoints(userDoc.data().ecoPoints);
-      }
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      const { data, error } = await supabase
+        .from('reports')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      setReports(data ?? []);
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('eco_points, email')
+        .eq('id', user.id)
+        .maybeSingle();
+      setEcoPoints(profile?.eco_points || 0);
+      setEmail(profile?.email || user.email || '');
     } catch (error) {
-      console.error('Error fetching reports:', error);
+      console.error(error);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const handleLogout = () => {
-    auth.signOut();
+  useFocusEffect(useCallback(() => { fetchMyReports(); }, [fetchMyReports]));
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
     navigation.replace('Login');
   };
 
-  const getStatusText = (status) => {
-    switch(status) {
-      case 'pending': return 'Pendiente';
-      case 'in_progress': return 'En Proceso';
-      case 'resolved': return 'Resuelto';
-      default: return status;
-    }
-  };
-
-  const getStatusColor = (status) => {
-    switch(status) {
-      case 'pending': return '#FF9800'; // Naranja
-      case 'in_progress': return '#2196F3'; // Azul
-      case 'resolved': return '#4CAF50'; // Verde
-      default: return '#666'; // Gris por defecto
-    }
-  };
-
-  const renderItem = ({ item }) => (
-    <View style={styles.reportCard}>
-      {item.imageUrl && (
-        <TouchableOpacity onPress={() => setSelectedImage(item.imageUrl)}>
-          <Image source={{ uri: item.imageUrl }} style={styles.thumbnail} />
-        </TouchableOpacity>
-      )}
-      <View style={styles.reportInfo}>
-        <Text style={styles.desc}>{item.description}</Text>
-        <Text style={[styles.status, { color: getStatusColor(item.status) }]}>
-          Estado: {getStatusText(item.status)}
-        </Text>
-      </View>
-    </View>
-  );
-
-  const getLevel = (points) => {
-    if (points >= 100) return '🏅 Guardián del Medio Ambiente';
-    if (points >= 50) return '🥈 Reciclador Experto';
-    if (points >= 10) return '🥉 Colaborador';
-    return '🌱 Novato';
-  };
+  const level = levelFor(ecoPoints);
+  const progress = level.next ? Math.min(1, (ecoPoints - level.floor) / (level.next - level.floor)) : 1;
+  const resolvedCount = reports.filter((item) => item.status === 'resolved').length;
+  const badges = achievements(ecoPoints, reports.length, resolvedCount);
 
   return (
-    <View style={styles.container}>
-      <View style={styles.pointsContainer}>
-        <Text style={styles.pointsTitle}>Mis Eco-Puntos</Text>
-        <Text style={styles.pointsValue}>{ecoPoints}</Text>
-        <Text style={styles.levelText}>{getLevel(ecoPoints)}</Text>
-      </View>
-
-      <Text style={styles.title}>Mis Reportes</Text>
-      
-      {loading ? (
-        <ActivityIndicator size="large" color="#2196F3" />
-      ) : reports.length === 0 ? (
-        <Text style={styles.emptyText}>No has realizado ningún reporte aún.</Text>
-      ) : (
-        <FlatList
-          data={reports}
-          keyExtractor={(item) => item.id}
-          renderItem={renderItem}
-          style={styles.list}
-        />
-      )}
-      
-      <View style={styles.space} />
-      <Button title="Cerrar Sesión" onPress={handleLogout} color="#f44336" />
-
-      {/* Modal para ver la imagen en grande */}
-      <Modal visible={!!selectedImage} transparent={true} animationType="fade">
-        <View style={styles.modalContainer}>
-          <TouchableOpacity style={styles.modalCloseButton} onPress={() => setSelectedImage(null)}>
-            <Text style={styles.modalCloseText}>Cerrar X</Text>
-          </TouchableOpacity>
-          {selectedImage && <Image source={{ uri: selectedImage }} style={styles.fullImage} resizeMode="contain" />}
+    <View style={{ flex: 1 }}>
+    <FlatList
+      style={styles.screen}
+      contentContainerStyle={styles.content}
+      data={reports}
+      keyExtractor={(item) => item.id}
+      ListHeaderComponent={(
+        <View>
+          <Text style={styles.kicker}>Tu cuenta</Text>
+          <Text style={styles.title}>{email || 'Mi perfil'}</Text>
+          <View style={styles.hero}>
+            <Text style={styles.points}>{ecoPoints}</Text>
+            <Text style={styles.level}>{level.name}</Text>
+            <View style={styles.track}><View style={[styles.fill, { width: `${progress * 100}%` }]} /></View>
+            <Text style={styles.hint}>{resolvedCount} de tus reportes ya fueron resueltos</Text>
+          </View>
+          <Text style={styles.section}>Logros</Text>
+          <View style={styles.badges}>
+            {badges.map((item) => (
+              <View key={item.title} style={[styles.badge, !item.done && styles.badgeOff]}>
+                <Text style={styles.badgeTitle}>{item.title}</Text>
+                <Text style={styles.badgeDetail}>{item.done ? 'Conseguido' : item.detail}</Text>
+              </View>
+            ))}
+          </View>
+          <Text style={styles.section}>Mis reportes</Text>
+          {loading && <ActivityIndicator color={colors.green} />}
+          {!loading && reports.length === 0 && <Text style={styles.empty}>Todavía no has publicado un reporte.</Text>}
         </View>
-      </Modal>
+      )}
+      renderItem={({ item }) => {
+        const tone = statusColors(item.status);
+        return (
+          <View style={styles.card}>
+            {item.image_url && (
+              <TouchableOpacity onPress={() => setSelectedImage(item.image_url)}>
+                <Image source={{ uri: item.image_url }} style={styles.thumb} />
+              </TouchableOpacity>
+            )}
+            <View style={{ flex: 1 }}>
+              <Text style={styles.desc}>{reportText(item)}</Text>
+              <Text style={{ color: tone.fg, fontWeight: '800', marginTop: 4 }}>{statusLabel(item.status)} · {timeAgo(item.created_at)}</Text>
+            </View>
+          </View>
+        );
+      }}
+      ListFooterComponent={(
+        <TouchableOpacity style={styles.logout} onPress={handleLogout}>
+          <Text style={styles.logoutText}>Cerrar sesión</Text>
+        </TouchableOpacity>
+      )}
+      ListFooterComponentStyle={{ marginTop: 8 }}
+    />
+    <Modal visible={!!selectedImage} transparent animationType="fade">
+      <View style={styles.modal}>
+        <TouchableOpacity style={styles.close} onPress={() => setSelectedImage(null)}>
+          <Text style={styles.closeText}>Cerrar</Text>
+        </TouchableOpacity>
+        {selectedImage && <Image source={{ uri: selectedImage }} style={styles.full} resizeMode="contain" />}
+      </View>
+    </Modal>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 20 },
-  pointsContainer: {
-    backgroundColor: '#4CAF50',
-    padding: 20,
-    borderRadius: 15,
-    alignItems: 'center',
-    marginBottom: 20,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOpacity: 0.2,
-    shadowRadius: 5,
-    shadowOffset: { width: 0, height: 2 }
-  },
-  pointsTitle: { color: 'white', fontSize: 18, fontWeight: '600' },
-  pointsValue: { color: 'white', fontSize: 40, fontWeight: 'bold', marginVertical: 5 },
-  levelText: { color: 'white', fontSize: 16, fontStyle: 'italic' },
-  title: { fontSize: 22, fontWeight: 'bold', marginBottom: 20, textAlign: 'center' },
-  space: { height: 20 },
-  list: { flex: 1 },
-  emptyText: { textAlign: 'center', color: '#888', marginTop: 20 },
-  reportCard: { 
-    flexDirection: 'row', 
-    backgroundColor: '#fff', 
-    padding: 10, 
-    marginBottom: 10, 
-    borderRadius: 8,
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 2 }
-  },
-  thumbnail: { width: 60, height: 60, borderRadius: 5, marginRight: 15, backgroundColor: '#eee' },
-  reportInfo: { flex: 1, justifyContent: 'center' },
-  desc: { fontSize: 16, fontWeight: 'bold' },
-  status: { marginTop: 5, fontWeight: 'bold' },
-  modalContainer: { flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', justifyContent: 'center', alignItems: 'center' },
-  fullImage: { width: '90%', height: '80%' },
-  modalCloseButton: { position: 'absolute', top: 50, right: 20, zIndex: 1, padding: 10 },
-  modalCloseText: { color: 'white', fontSize: 18, fontWeight: 'bold' }
+  screen: { flex: 1, backgroundColor: colors.bg },
+  content: { padding: 20, paddingBottom: 28 },
+  kicker: { color: colors.green, fontWeight: '800', fontSize: 12, textTransform: 'uppercase' },
+  title: { fontSize: 24, fontWeight: '800', color: colors.ink, marginTop: 4, marginBottom: 12 },
+  hero: { backgroundColor: colors.greenDark, borderRadius: 22, padding: 18 },
+  points: { color: '#fff', fontSize: 40, fontWeight: '800' },
+  level: { color: '#d7f5e5', fontWeight: '700' },
+  track: { height: 8, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 99, marginTop: 12, overflow: 'hidden' },
+  fill: { height: 8, backgroundColor: '#8ee0b5' },
+  hint: { color: '#d7f5e5', marginTop: 8 },
+  section: { fontSize: 18, fontWeight: '800', color: colors.ink, marginTop: 18, marginBottom: 8 },
+  badges: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  badge: { width: '48%', backgroundColor: colors.greenSoft, borderRadius: 16, padding: 12 },
+  badgeOff: { backgroundColor: '#fff' },
+  badgeTitle: { fontWeight: '800', color: colors.ink },
+  badgeDetail: { color: colors.muted, marginTop: 4, fontSize: 12 },
+  card: { flexDirection: 'row', gap: 12, backgroundColor: '#fff', borderRadius: 16, padding: 12, marginBottom: 8, alignItems: 'center' },
+  thumb: { width: 56, height: 56, borderRadius: 12, backgroundColor: colors.greenSoft },
+  desc: { fontWeight: '700', color: colors.ink },
+  empty: { color: colors.muted },
+  logout: { marginTop: 16, borderRadius: 14, paddingVertical: 14, alignItems: 'center', backgroundColor: '#fff' },
+  logoutText: { color: colors.red, fontWeight: '800' },
+  modal: { flex: 1, backgroundColor: 'rgba(8,20,14,0.92)', justifyContent: 'center' },
+  full: { width: '100%', height: '75%' },
+  close: { position: 'absolute', top: 54, right: 20 },
+  closeText: { color: '#fff', fontWeight: '800', fontSize: 16 },
 });

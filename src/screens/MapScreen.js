@@ -1,7 +1,10 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, Platform } from 'react-native';
-import { collection, getDocs, doc, getDoc, updateDoc, increment } from 'firebase/firestore';
-import { db, auth } from '../services/firebase';
+import React, { useCallback, useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, Platform } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import { supabase } from '../services/supabase';
+import { colors } from '../theme';
+import { loadReports, loadSessionProfile } from '../services/reportsApi';
+import { CLEAN_POINTS, reportText, statusLabel } from '../utils/reports';
 
 let MapView, Marker, Polygon;
 if (Platform.OS !== 'web') {
@@ -11,305 +14,155 @@ if (Platform.OS !== 'web') {
   Polygon = Maps.Polygon;
 }
 
+const ZONA_RECOLECCION = [
+  { latitude: 9.3100, longitude: -75.4050 },
+  { latitude: 9.3200, longitude: -75.4000 },
+  { latitude: 9.3150, longitude: -75.3850 },
+  { latitude: 9.3050, longitude: -75.3900 },
+];
+
 export default function MapScreen({ navigation }) {
   const [reports, setReports] = useState([]);
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [isCollector, setIsCollector] = useState(false);
-  const [filters, setFilters] = useState({
-    pendientes: true,
-    resueltos: true,
-    puntosLimpios: true,
-    zonas: true,
-  });
+  const [role, setRole] = useState('citizen');
+  const [filters, setFilters] = useState({ pendientes: true, resueltos: true, puntos: true, zonas: true });
 
-  useEffect(() => {
-    checkUserRole();
-    const unsubscribe = navigation.addListener('focus', () => {
-      fetchReports();
-    });
-    return unsubscribe;
-  }, [navigation]);
-
-  const checkUserRole = async () => {
+  const refresh = useCallback(async () => {
     try {
-      if (auth.currentUser) {
-        const userDoc = await getDoc(doc(db, 'users', auth.currentUser.uid));
-        if (userDoc.exists()) {
-          const role = userDoc.data().role;
-          if (role === 'admin') setIsAdmin(true);
-          if (role === 'collector') setIsCollector(true);
-        }
-      }
+      const [{ profile }, nextReports] = await Promise.all([loadSessionProfile(), loadReports()]);
+      setRole(profile?.role || 'citizen');
+      setReports(nextReports);
     } catch (error) {
-      console.log('Error fetching user role:', error);
+      console.log(error);
     }
-  };
+  }, []);
 
-  const fetchReports = async () => {
-    try {
-      const querySnapshot = await getDocs(collection(db, 'reports'));
-      const reportsData = [];
-      querySnapshot.forEach((docSnap) => {
-        reportsData.push({ id: docSnap.id, ...docSnap.data() });
-      });
-      setReports(reportsData);
-    } catch (error) {
-      console.error("Error fetching map reports:", error);
-    }
-  };
+  useFocusEffect(useCallback(() => { refresh(); }, [refresh]));
 
-  const initialRegion = {
-    latitude: 9.3047,
-    longitude: -75.3978,
-    latitudeDelta: 0.05,
-    longitudeDelta: 0.05,
-  };
-
-  const customMapStyle = [
-    {
-      "featureType": "poi.park",
-      "elementType": "geometry.fill",
-      "stylers": [{"color": "#a8de97"}]
-    },
-    {
-      "featureType": "water",
-      "elementType": "geometry.fill",
-      "stylers": [{"color": "#a4c9d4"}]
-    }
-  ];
-
-  const PUNTOS_LIMPIOS = [
-    { id: 'p1', title: 'Punto Limpio Centro', description: 'Reciclaje de plásticos y cartón', coordinate: { latitude: 9.3000, longitude: -75.3950 } },
-    { id: 'p2', title: 'Punto Limpio Norte', description: 'Vidrio y electrónicos', coordinate: { latitude: 9.3150, longitude: -75.3900 } }
-  ];
-
-  const ZONA_RECOLECCION = [
-    { latitude: 9.3100, longitude: -75.4050 },
-    { latitude: 9.3200, longitude: -75.4000 },
-    { latitude: 9.3150, longitude: -75.3850 },
-    { latitude: 9.3050, longitude: -75.3900 },
-  ];
-
-  const toggleFilter = (key) => {
-    setFilters(prev => ({ ...prev, [key]: !prev[key] }));
-  };
+  const toggle = (key) => setFilters((prev) => ({ ...prev, [key]: !prev[key] }));
 
   const handleMarkerPress = (report) => {
-    if (isCollector && report.status !== 'resolved') {
-      Alert.alert(
-        "Recolección",
-        "¿Marcar este residuo como recogido?",
-        [
-          { text: "Cancelar", style: "cancel" },
-          { 
-            text: "Confirmar", 
-            onPress: async () => {
-              try {
-                await updateDoc(doc(db, 'reports', report.id), { status: 'resolved' });
-                // Gamification (dar puntos al que lo reportó)
-                if (report.userId && report.userId !== 'anonymous') {
-                  await updateDoc(doc(db, 'users', report.userId), { ecoPoints: increment(10) });
-                }
-                Alert.alert("Éxito", "Residuo recogido");
-                fetchReports(); // recargar
-              } catch (e) {
-                console.log(e);
-              }
-            }
+    if (role !== 'collector' || report.status === 'resolved') return;
+    Alert.alert('Recolección', '¿Marcar este residuo como recogido?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Confirmar',
+        onPress: async () => {
+          const { error } = await supabase.rpc('set_report_status', {
+            p_report_id: report.id,
+            p_status: 'resolved',
+          });
+          if (error) {
+            Alert.alert('No se pudo actualizar', error.message);
+            return;
           }
-        ]
-      );
-    }
+          Alert.alert('Listo', 'El reporte quedó resuelto y sumó 10 eco-puntos.');
+          refresh();
+        },
+      },
+    ]);
   };
 
   return (
-    <View style={styles.container}>
+    <View style={styles.screen}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Hola, {isCollector ? 'Recolector' : 'Ciudadano'} 👋</Text>
-        <Text style={styles.headerSubtitle}>Mantengamos a Sincelejo Limpio</Text>
+        <View>
+          <Text style={styles.title}>Mapa</Text>
+          <Text style={styles.subtitle}>{role === 'collector' ? 'Toca un punto naranja para recogerlo' : 'Pendientes en naranja, resueltos en verde'}</Text>
+        </View>
+        {role !== 'collector' && (
+          <TouchableOpacity style={styles.add} onPress={() => navigation.navigate('Report')}>
+            <Text style={styles.addText}>+</Text>
+          </TouchableOpacity>
+        )}
       </View>
-
-      <View style={styles.filterContainer}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-          <TouchableOpacity style={[styles.filterChip, filters.pendientes && styles.filterChipActive]} onPress={() => toggleFilter('pendientes')}>
-            <Text style={[styles.filterText, filters.pendientes && styles.filterTextActive]}>🗑️ Pendientes</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.filterChip, filters.resueltos && styles.filterChipActive]} onPress={() => toggleFilter('resueltos')}>
-            <Text style={[styles.filterText, filters.resueltos && styles.filterTextActive]}>✅ Resueltos</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.filterChip, filters.puntosLimpios && styles.filterChipActive]} onPress={() => toggleFilter('puntosLimpios')}>
-            <Text style={[styles.filterText, filters.puntosLimpios && styles.filterTextActive]}>♻️ Puntos Limpios</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.filterChip, filters.zonas && styles.filterChipActive]} onPress={() => toggleFilter('zonas')}>
-            <Text style={[styles.filterText, filters.zonas && styles.filterTextActive]}>🗺️ Zonas</Text>
-          </TouchableOpacity>
-        </ScrollView>
+      <View style={styles.filters}>
+        <Chip icon="🗑️" label="Pendientes" active={filters.pendientes} onPress={() => toggle('pendientes')} />
+        <Chip icon="✅" label="Resueltos" active={filters.resueltos} onPress={() => toggle('resueltos')} />
+        <Chip icon="♻️" label="Puntos limpios" active={filters.puntos} onPress={() => toggle('puntos')} />
+        <Chip icon="🗺️" label="Zona norte" active={filters.zonas} onPress={() => toggle('zonas')} />
       </View>
 
       {Platform.OS !== 'web' ? (
-        <MapView 
-          style={styles.map} 
-          initialRegion={initialRegion}
-          customMapStyle={customMapStyle}
-          showsUserLocation={true}
+        <MapView
+          style={styles.map}
+          initialRegion={{ latitude: 9.3047, longitude: -75.3978, latitudeDelta: 0.05, longitudeDelta: 0.05 }}
+          showsUserLocation
         >
-          {reports.map(report => {
-            if (!report.location) return null;
+          {reports.map((report) => {
+            if (report.latitude == null || report.longitude == null) return null;
             if (report.status === 'resolved' && !filters.resueltos) return null;
             if (report.status !== 'resolved' && !filters.pendientes) return null;
-
             return (
-              <Marker 
+              <Marker
                 key={report.id}
-                coordinate={{ 
-                  latitude: report.location.latitude, 
-                  longitude: report.location.longitude 
-                }}
-                title={`Residuo - ${report.status}`}
-                description={report.description + (isCollector && report.status !== 'resolved' ? '\n(Toca para marcar recogido)' : '')}
-                pinColor={report.status === 'resolved' ? 'green' : 'orange'}
+                coordinate={{ latitude: report.latitude, longitude: report.longitude }}
+                title={statusLabel(report.status)}
+                description={reportText(report)}
+                tracksViewChanges
                 onCalloutPress={() => handleMarkerPress(report)}
-              />
+              >
+                <View style={[styles.pin, report.status === 'resolved' ? styles.pinDone : styles.pinOpen]}>
+                  <Text style={styles.pinIcon}>{report.status === 'resolved' ? '✅' : '🗑️'}</Text>
+                </View>
+              </Marker>
             );
           })}
-
-          {filters.puntosLimpios && PUNTOS_LIMPIOS.map(punto => (
+          {filters.puntos && CLEAN_POINTS.map((punto) => (
             <Marker
               key={punto.id}
-              coordinate={punto.coordinate}
+              coordinate={{ latitude: punto.latitude, longitude: punto.longitude }}
               title={punto.title}
-              description={punto.description}
-              pinColor="blue"
-            />
+              description={punto.detail}
+              tracksViewChanges
+            >
+              <View style={[styles.pin, styles.pinClean]}>
+                <Text style={styles.pinIcon}>♻️</Text>
+              </View>
+            </Marker>
           ))}
-
           {filters.zonas && (
-            <Polygon
-              coordinates={ZONA_RECOLECCION}
-              strokeColor="rgba(33, 150, 243, 0.8)"
-              fillColor="rgba(33, 150, 243, 0.2)"
-              strokeWidth={2}
-            />
+            <Polygon coordinates={ZONA_RECOLECCION} strokeColor="rgba(14,122,69,0.9)" fillColor="rgba(14,122,69,0.18)" strokeWidth={2} />
           )}
         </MapView>
       ) : (
-        <View style={[styles.map, {justifyContent: 'center', alignItems: 'center', backgroundColor: '#e2e8f0'}]}>
-          <Text style={{fontSize: 18, color: '#64748b'}}>Mapa no disponible en versión Web</Text>
+        <View style={styles.webFallback}>
+          <Text style={styles.webTitle}>El mapa se abre en el celular</Text>
+          <Text style={styles.webText}>{reports.length} reportes cargados. En el navegador puedes revisar Inicio, Ciudad, Guía y Perfil.</Text>
         </View>
       )}
-
-      <View style={styles.bottomNav}>
-        {isAdmin && (
-          <TouchableOpacity style={styles.navItem} onPress={() => navigation.navigate('Admin')}>
-            <Text style={styles.navIcon}>🛡️</Text>
-            <Text style={styles.navText}>Admin</Text>
-          </TouchableOpacity>
-        )}
-        {!isCollector && (
-          <TouchableOpacity style={styles.navItemMain} onPress={() => navigation.navigate('Report')}>
-            <View style={styles.mainActionBtn}>
-              <Text style={styles.mainActionText}>+</Text>
-            </View>
-            <Text style={styles.navTextMain}>Reportar</Text>
-          </TouchableOpacity>
-        )}
-        
-        <TouchableOpacity style={styles.navItem} onPress={() => navigation.navigate('Community')}>
-          <Text style={styles.navIcon}>👥</Text>
-          <Text style={styles.navText}>Comunidad</Text>
-        </TouchableOpacity>
-        
-        <TouchableOpacity style={styles.navItem} onPress={() => navigation.navigate('Profile')}>
-          <Text style={styles.navIcon}>👤</Text>
-          <Text style={styles.navText}>Perfil</Text>
-        </TouchableOpacity>
-      </View>
     </View>
   );
 }
 
+function Chip({ icon, label, active, onPress }) {
+  return (
+    <TouchableOpacity style={[styles.chip, active && styles.chipOn]} onPress={onPress}>
+      <Text style={styles.chipIcon}>{icon}</Text>
+      <Text style={[styles.chipText, active && styles.chipTextOn]}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f0fdf4' },
-  header: {
-    paddingTop: 50,
-    paddingHorizontal: 20,
-    paddingBottom: 15,
-    backgroundColor: '#fff',
-    borderBottomLeftRadius: 25,
-    borderBottomRightRadius: 25,
-    elevation: 5,
-    shadowColor: '#000',
-    shadowOpacity: 0.1,
-    shadowRadius: 5,
-    shadowOffset: { width: 0, height: 2 },
-    zIndex: 2,
-  },
-  headerTitle: { fontSize: 24, fontWeight: '800', color: '#166534' },
-  headerSubtitle: { fontSize: 14, color: '#15803d', marginTop: 4 },
-  map: { width: '100%', height: '100%', position: 'absolute' },
-  filterContainer: {
-    position: 'absolute',
-    top: 130,
-    width: '100%',
-    zIndex: 1,
-    paddingHorizontal: 10,
-  },
-  filterChip: {
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
-    paddingHorizontal: 15,
-    paddingVertical: 10,
-    borderRadius: 25,
-    marginRight: 10,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    shadowOffset: { width: 0, height: 2 }
-  },
-  filterChipActive: {
-    backgroundColor: '#16a34a',
-    borderColor: '#16a34a',
-  },
-  filterText: { color: '#64748b', fontWeight: 'bold' },
-  filterTextActive: { color: '#fff' },
-  bottomNav: {
-    position: 'absolute',
-    bottom: 20,
-    alignSelf: 'center',
-    width: '90%',
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
-    borderRadius: 30,
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    alignItems: 'center',
-    paddingVertical: 10,
-    elevation: 10,
-    shadowColor: '#000',
-    shadowOpacity: 0.15,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 5 },
-  },
-  navItem: { alignItems: 'center', padding: 5 },
-  navIcon: { fontSize: 24, marginBottom: 2 },
-  navText: { fontSize: 10, color: '#64748b', fontWeight: 'bold' },
-  navItemMain: { alignItems: 'center', marginTop: -30 },
-  mainActionBtn: {
-    backgroundColor: '#16a34a',
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    justifyContent: 'center',
-    alignItems: 'center',
-    elevation: 5,
-    shadowColor: '#16a34a',
-    shadowOpacity: 0.4,
-    shadowRadius: 5,
-    shadowOffset: { width: 0, height: 3 },
-    borderWidth: 3,
-    borderColor: '#fff'
-  },
-  mainActionText: { color: 'white', fontSize: 32, fontWeight: 'bold', marginTop: -2 },
-  navTextMain: { fontSize: 10, color: '#16a34a', fontWeight: 'bold', marginTop: 5 }
+  screen: { flex: 1, backgroundColor: colors.bg },
+  header: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 8, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  title: { fontSize: 28, fontWeight: '800', color: colors.ink },
+  subtitle: { color: colors.muted, marginTop: 2, maxWidth: 250 },
+  add: { width: 48, height: 48, borderRadius: 16, backgroundColor: colors.green, alignItems: 'center', justifyContent: 'center' },
+  addText: { color: '#fff', fontSize: 28, fontWeight: '700', marginTop: -2 },
+  filters: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 16, paddingBottom: 10 },
+  chip: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8, borderWidth: 1, borderColor: colors.line },
+  chipOn: { backgroundColor: colors.green, borderColor: colors.green },
+  chipIcon: { fontSize: 16, marginRight: 6 },
+  chipText: { color: colors.muted, fontWeight: '700' },
+  chipTextOn: { color: '#fff' },
+  pin: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#fff' },
+  pinOpen: { backgroundColor: '#f59e0b' },
+  pinDone: { backgroundColor: '#0e7a45' },
+  pinClean: { backgroundColor: '#1d4ed8' },
+  pinIcon: { fontSize: 16 },
+  map: { flex: 1 },
+  webFallback: { flex: 1, margin: 16, borderRadius: 20, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', padding: 24 },
+  webTitle: { fontSize: 18, fontWeight: '800', color: colors.ink },
+  webText: { color: colors.muted, textAlign: 'center', marginTop: 8, lineHeight: 20 },
 });

@@ -1,24 +1,21 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, Button, StyleSheet, Alert, ActivityIndicator } from 'react-native';
-import { signInWithEmailAndPassword, onAuthStateChanged } from 'firebase/auth';
+import { View, Text, TextInput, StyleSheet, Alert, ActivityIndicator, TouchableOpacity, KeyboardAvoidingView, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { auth } from '../services/firebase';
+import { supabase } from '../services/supabase';
+import { colors } from '../theme';
 
 export default function LoginScreen({ navigation }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      if (user) {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (session?.user) {
         try {
           const hasSeenOnboarding = await AsyncStorage.getItem('hasSeenOnboarding');
-          if (hasSeenOnboarding === 'true') {
-            navigation.replace('Map');
-          } else {
-            navigation.replace('Onboarding');
-          }
+          navigation.replace(hasSeenOnboarding === 'true' ? 'Main' : 'Onboarding');
         } catch (error) {
           navigation.replace('Onboarding');
         }
@@ -26,66 +23,64 @@ export default function LoginScreen({ navigation }) {
         setLoading(false);
       }
     });
-
-    return unsubscribe;
-  }, []);
+    return () => subscription.unsubscribe();
+  }, [navigation]);
 
   const handleLogin = async () => {
     if (!email || !password) {
-      Alert.alert('Error', 'Por favor ingresa correo y contraseña');
+      Alert.alert('Faltan datos', 'Escribe correo y contraseña.');
       return;
     }
+    setSubmitting(true);
     try {
-      await signInWithEmailAndPassword(auth, email, password);
-      // Navigation is handled by onAuthStateChanged
+      const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+      if (error) throw error;
     } catch (error) {
-      Alert.alert('Error de inicio de sesión', error.message);
+      Alert.alert('No se pudo entrar', error.message);
+    } finally {
+      setSubmitting(false);
     }
   };
 
   if (loading) {
     return (
-      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
-        <ActivityIndicator size="large" color="#16a34a" />
+      <View style={[styles.screen, styles.center]}>
+        <ActivityIndicator size="large" color={colors.green} />
       </View>
     );
   }
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Sincelejo Residuos</Text>
-      
-      <TextInput 
-        style={styles.input} 
-        placeholder="Correo electrónico" 
-        value={email}
-        onChangeText={setEmail}
-        autoCapitalize="none"
-        keyboardType="email-address"
-      />
-      <TextInput 
-        style={styles.input} 
-        placeholder="Contraseña" 
-        value={password}
-        onChangeText={setPassword}
-        secureTextEntry
-      />
-      
-      <View style={styles.buttonContainer}>
-        <Button title="Iniciar Sesión" onPress={handleLogin} color="#16a34a" />
+    <KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <View style={styles.hero}>
+        <Text style={styles.brand}>Sincelejo Limpio</Text>
+        <Text style={styles.lead}>Reporta, sigue la ruta y suma eco-puntos con tu barrio.</Text>
       </View>
-      <View style={styles.space} />
-      <View style={styles.buttonContainer}>
-        <Button title="Crear una cuenta" onPress={() => navigation.navigate('Register')} color="#475569" />
+      <View style={styles.card}>
+        <Text style={styles.title}>Entrar</Text>
+        <TextInput style={styles.input} placeholder="Correo" placeholderTextColor="#8aa094" value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" />
+        <TextInput style={styles.input} placeholder="Contraseña" placeholderTextColor="#8aa094" value={password} onChangeText={setPassword} secureTextEntry />
+        <TouchableOpacity style={styles.button} onPress={handleLogin} disabled={submitting}>
+          {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Iniciar sesión</Text>}
+        </TouchableOpacity>
+        <TouchableOpacity onPress={() => navigation.navigate('Register')}>
+          <Text style={styles.link}>Crear una cuenta</Text>
+        </TouchableOpacity>
       </View>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, justifyContent: 'center', padding: 20, backgroundColor: '#f0fdf4' },
-  title: { fontSize: 28, fontWeight: 'bold', marginBottom: 40, textAlign: 'center', color: '#166534' },
-  input: { borderWidth: 1, borderColor: '#bbf7d0', backgroundColor: '#fff', padding: 15, marginBottom: 15, borderRadius: 10, fontSize: 16 },
-  space: { height: 15 },
-  buttonContainer: { borderRadius: 10, overflow: 'hidden' }
+  screen: { flex: 1, backgroundColor: colors.greenDark },
+  center: { justifyContent: 'center', alignItems: 'center' },
+  hero: { flex: 1, justifyContent: 'flex-end', padding: 28 },
+  brand: { color: '#fff', fontSize: 36, fontWeight: '800' },
+  lead: { color: '#d7f5e5', marginTop: 8, fontSize: 16, lineHeight: 22 },
+  card: { backgroundColor: colors.bg, borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 24, paddingBottom: 36 },
+  title: { fontSize: 22, fontWeight: '800', color: colors.ink, marginBottom: 14 },
+  input: { backgroundColor: '#fff', borderRadius: 14, padding: 14, marginBottom: 10, fontSize: 16, color: colors.ink },
+  button: { backgroundColor: colors.green, borderRadius: 14, paddingVertical: 15, alignItems: 'center', marginTop: 6 },
+  buttonText: { color: '#fff', fontWeight: '800', fontSize: 16 },
+  link: { textAlign: 'center', marginTop: 16, color: colors.green, fontWeight: '800' },
 });
